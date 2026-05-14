@@ -1,0 +1,119 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: datanomics-postgres
+    environment:
+      POSTGRES_USER: datanomics
+      POSTGRES_PASSWORD: datanomics_secure_password_change_in_prod
+      POSTGRES_DB: datanomics_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/prisma/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datanomics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - datanomics-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: datanomics-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - datanomics-network
+
+  # Backend Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: datanomics-backend
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://datanomics:datanomics_secure_password_change_in_prod@postgres:5432/datanomics_dev
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your_super_secret_jwt_key_change_in_production
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      AFRICAS_TALKING_API_KEY: ${AFRICAS_TALKING_API_KEY}
+      WHATSAPP_BUSINESS_TOKEN: ${WHATSAPP_BUSINESS_TOKEN}
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src
+      - /app/node_modules
+    command: npm run dev
+    networks:
+      - datanomics-network
+
+  # Frontend Service (Development)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: datanomics-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_WS_URL: ws://localhost:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/.next
+      - /app/node_modules
+    command: npm run dev
+    networks:
+      - datanomics-network
+
+  # Nginx Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: datanomics-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - datanomics-network
+    profiles:
+      - production
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  datanomics-network:
+    driver: bridge
